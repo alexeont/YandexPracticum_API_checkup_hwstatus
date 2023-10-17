@@ -1,10 +1,10 @@
 class ApiResponseHomeworkError(Exception):
-    """API вернул домашку без необходимых ключей."""
+    """API вернул домашку c ошибкой."""
 
     ...
 
 
-class InvalidResponse(Exception):
+class EmptyAPIResponse(Exception):
     """API вернул невалидный ответ."""
 
     ...
