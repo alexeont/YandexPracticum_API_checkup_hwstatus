@@ -49,44 +49,47 @@ def check_tokens():
         (TELEGRAM_TOKEN, 'Телеграм-токен'),
         (TELEGRAM_CHAT_ID, 'ID Телеграм-чата')
     )
-    '''Сначала пробовал сделать константой файла, но тесты не принимали'''
+    token_found = True
     for token, name in TOKENS_DATA:
-        if token is None:
+        if not token:
             logging.critical(f'Отсутствует {name}')
-            raise SystemExit
+            token_found = False
+    if not token_found:
+        raise SystemExit
 
 
 def send_message(bot, message):
     """Отправка сообщения в ТГ."""
-    logging.debug('Отправляем сообщение в ТГ...')
+    logging.debug(f'Отправляем сообщение "{message}" в ТГ...')
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
     except telegram.error.TelegramError as error:
         logging.error(f'Ошибка при отправке сообщения в ТГ: {error}')
         return False
     else:
-        logging.debug('Сообщение об изменении статуса '
-                      'успешно отправлено в ТГ')
+        logging.debug(f'Сообщение "{message}" успешно отправлено в ТГ')
         return True
 
 
 def get_api_answer(timestamp):
     """Получаем ответ от Яндекса."""
-    # Сделал так, потому что большинство данных и так константы,
-    # словарь как-будто лишний
     params = {'from_date': timestamp}
-    request_text = f'URL = {ENDPOINT}, headers = {HEADERS}, params = {params}'
-    logging.debug(f'Отправляем запрос Яндексу: {request_text}')
+    logging.debug(f'Отправляем запрос на {ENDPOINT} '
+                  f'с headers = {HEADERS}, params = {params}')
     try:
         homework_response = requests.get(ENDPOINT,
                                          headers=HEADERS,
                                          params=params)
-        if homework_response.status_code != HTTPStatus.OK:
-            raise YandexStatusCodeError
+        status_code = homework_response.status_code
+        if status_code != HTTPStatus.OK:
+            raise YandexStatusCodeError(f'Вернулся код "{status_code}". '
+                                        f'Причина: {homework_response.reason}'
+                                        f'{homework_response.text}')
         return homework_response.json()
-    except requests.RequestException:
-        logging.error(f'Ошибка при отправке запроса: {request_text}')
-        raise ConnectionError(f'Ошибка при отправке запроса: {request_text}')
+    except requests.RequestException as error:
+        raise ConnectionError(f'Ошибка при отправке запроса на {ENDPOINT} '
+                              f'с headers = {HEADERS}, params = {params}. '
+                              f'Ошибка "{error}".')
 
 
 def check_response(response):
@@ -95,11 +98,11 @@ def check_response(response):
     if not isinstance(response, dict):
         raise TypeError(MESSAGE_FOR_EXCEPTIONS)
     if ('homeworks' or 'current_date') not in response.keys():
-        logging.error('От сервера вернулся пустой ответ')
         raise EmptyAPIResponse('От сервера вернулся пустой ответ')
-    if not isinstance(response['homeworks'], list):
+    homeworks = response.get('homeworks')
+    if not isinstance(homeworks, list):
         raise TypeError(MESSAGE_FOR_EXCEPTIONS)
-    return response['homeworks']
+    return homeworks
 
 
 def parse_status(homework):
@@ -108,11 +111,12 @@ def parse_status(homework):
         raise ApiResponseHomeworkError('У домашки нет названия')
     if 'status' not in homework.keys():
         raise ApiResponseHomeworkError('У домашки нет статуса')
-    if homework['status'] not in HOMEWORK_VERDICTS.keys():
+    status = homework.get('status')
+    if status not in HOMEWORK_VERDICTS.keys():
         raise KeyError('Получен непредусмотренный статус домашки')
-    verdict = HOMEWORK_VERDICTS[homework['status']]
-    return (f'Изменился статус проверки работы "{homework["homework_name"]}". '
-            f'{verdict}')
+    verdict = HOMEWORK_VERDICTS.get(status)
+    return (f'Изменился статус проверки работы '
+            f'"{homework.get("homework_name")}". {verdict}')
 
 
 def main():
@@ -130,21 +134,20 @@ def main():
             if homeworks:
                 homework = homeworks[0]
                 success_message = parse_status(homework)
-                current_report = HOMEWORK_VERDICTS[homework['status']]
+                current_report = success_message
             else:
                 current_report = 'Статус не был изменен'
             if not current_report == prev_report:
-                message_sent = send_message(bot, success_message)
-                if message_sent:
+                if send_message(bot, success_message):
                     prev_report = current_report
-                    timestamp = response.get('current_date')
+                    timestamp = response.get('current_date', timestamp)
             else:
                 logging.debug('Статус не был изменен')
         except EmptyAPIResponse as error:
             logging.error(error)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            logging.error(message)
+            logging.error(message, exc_info=True)
             if not message == prev_report:
                 bot.send_message(TELEGRAM_CHAT_ID, message)
                 prev_report = message
